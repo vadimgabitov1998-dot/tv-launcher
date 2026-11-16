@@ -1,0 +1,58 @@
+name: build-apk
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+      - name: Unpack sources
+        run: mkdir -p src && tar xzf src.tgz -C src
+      - name: Build APK
+        working-directory: src
+        run: |
+          set -o pipefail
+          gradle assembleRelease --no-daemon --stacktrace 2>&1 | tee ../build.log
+      - name: Publish APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp src/app/build/outputs/apk/release/app-release.apk tv-launcher.apk
+          gh release delete latest -y --cleanup-tag || true
+          gh release create latest tv-launcher.apk --title "Лаунчер (сборка ${{ github.run_number }})" --notes "Автосборка"
+          git config user.name "build-bot"
+          git config user.email "build-bot@users.noreply.github.com"
+          mkdir /tmp/out && cp tv-launcher.apk build.log /tmp/out/
+          echo "${{ github.run_number }}" > /tmp/out/build-number.txt
+          git checkout --orphan apk
+          git rm -rf . > /dev/null
+          rm -rf src
+          cp /tmp/out/* .
+          git add tv-launcher.apk build.log build-number.txt
+          git commit -m "APK ${{ github.run_number }}"
+          git push -f origin apk
+      - name: Publish build log on failure
+        if: failure()
+        run: |
+          git config user.name "build-bot"
+          git config user.email "build-bot@users.noreply.github.com"
+          cp build.log /tmp/build.log || echo "no log" > /tmp/build.log
+          echo "${{ github.run_number }}" > /tmp/build-number.txt
+          git checkout --orphan log
+          git rm -rf . > /dev/null
+          rm -rf src
+          cp /tmp/build.log /tmp/build-number.txt .
+          git add build.log build-number.txt
+          git commit -m "log ${{ github.run_number }}"
+          git push -f origin log
